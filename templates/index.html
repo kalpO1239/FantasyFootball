@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fantasy Football PPR Predictions</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-football-ball"></i> Fantasy Football PPR Predictions</h1>
+                <p>Advanced ML models for RB, QB, and WR/TE predictions</p>
+            </div>
+        </header>
+
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-container">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="playerSearch" placeholder="Search for a player (e.g., Josh Allen, Cooper Kupp, Derrick Henry)" autocomplete="off">
+                    <button id="searchBtn" class="search-btn">
+                        <i class="fas fa-search"></i> Search
+                    </button>
+                </div>
+                <div id="searchResults" class="search-results"></div>
+            </div>
+        </section>
+
+        <!-- Loading Section -->
+        <div id="loadingSection" class="loading-section" style="display: none;">
+            <div class="loading-spinner">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Analyzing player data and generating predictions...</p>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <section id="resultsSection" class="results-section" style="display: none;">
+            <div class="player-header">
+                <h2 id="playerName"></h2>
+                <div id="playerPositions" class="positions"></div>
+            </div>
+
+            <div id="predictionsContainer" class="predictions-container">
+                <!-- Predictions will be populated here -->
+            </div>
+        </section>
+
+        <!-- Error Section -->
+        <div id="errorSection" class="error-section" style="display: none;">
+            <div class="error-content">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Error</h3>
+                <p id="errorMessage"></p>
+            </div>
+        </div>
+
+        <!-- Rankings Section -->
+        <section class="rankings-section">
+            <div class="rankings-header">
+                <h2>Position Rankings</h2>
+                <p>Click on a position to see top players ranked by expected PPR</p>
+            </div>
+            
+            <div class="position-tabs">
+                <button class="tab-button active" data-position="RB">
+                    <i class="fas fa-running"></i>
+                    Running Backs
+                </button>
+                <button class="tab-button" data-position="QB">
+                    <i class="fas fa-football-ball"></i>
+                    Quarterbacks
+                </button>
+                <button class="tab-button" data-position="WRTE">
+                    <i class="fas fa-hand-paper"></i>
+                    WR/TE
+                </button>
+            </div>
+            
+            <div id="rankingsContainer" class="rankings-container">
+                <!-- Rankings will be populated here -->
+            </div>
+        </section>
+
+        <!-- Info Section -->
+        <section class="info-section">
+            <div class="info-grid">
+                <div class="info-card">
+                    <i class="fas fa-running"></i>
+                    <h3>Running Backs</h3>
+                    <p>Volume-based predictions with receiving upside analysis</p>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-football-ball"></i>
+                    <h3>Quarterbacks</h3>
+                    <p>Passing efficiency with mobile QB rushing corrections</p>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-hand-paper"></i>
+                    <h3>WR/TE</h3>
+                    <p>Target volume and efficiency metrics</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
