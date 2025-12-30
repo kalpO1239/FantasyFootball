@@ -15,14 +15,29 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def load_rushing_stats(rush_dir: str) -> pd.DataFrame:
-    """Load all rushing stats files"""
+    """Load all rushing stats files
+    Automatically maps first 18 weeks to 2024 season, remaining weeks to 2025 season
+    """
     rush_files = sorted(Path(rush_dir).glob("*.csv"))
-    frames = []
+    first_season_weeks = 18  # First 18 weeks belong to earliest season (2024)
     
-    for i, file in enumerate(rush_files, 1):
+    frames = []
+    for global_week_idx, file in enumerate(rush_files, 1):
         df = pd.read_csv(file)
         df.columns = [c.strip() for c in df.columns]
-        df["WEEK"] = i
+        
+        # Map to season and week based on position in file sequence
+        if global_week_idx <= first_season_weeks:
+            # First 18 weeks → 2024 season
+            df["SEASON"] = 2024
+            df["WEEK"] = global_week_idx  # Week 1-18 of 2024 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 1-18
+        else:
+            # Remaining weeks → 2025 season
+            df["SEASON"] = 2025
+            df["WEEK"] = global_week_idx - first_season_weeks  # Week 1-N of 2025 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 19+
+        
         frames.append(df)
     
     rush = pd.concat(frames, ignore_index=True)
@@ -86,33 +101,42 @@ def load_ppr_season(ppr_path: str, season: int) -> pd.DataFrame:
     long_df["PLAYER"] = long_df[player_col].apply(normalize_player_name)
     long_df = long_df.drop(columns=[player_col])
 
+    # Set GLOBAL_WEEK based on season
+    # First 18 weeks belong to 2024, remaining weeks belong to 2025
+    first_season_weeks = 18
     if season == 2024:
-        long_df = long_df[long_df["WEEK"] <= 16]
+        long_df["GLOBAL_WEEK"] = long_df["WEEK"]  # Weeks 1-18 map to GLOBAL_WEEK 1-18
+    else:  # season == 2025
+        long_df["GLOBAL_WEEK"] = long_df["WEEK"] + first_season_weeks  # Weeks 1-N map to GLOBAL_WEEK 19+
 
     return long_df
 
 def build_markov_transition_matrix(player_ppr_data, states=5):
     """Build Markov transition matrix for player performance states"""
     if len(player_ppr_data) < 2:
-        return np.eye(states)
+        return np.eye(states), np.linspace(0, 30, states + 1)
     
-    ppr_values = player_ppr_data['PPR'].dropna()
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_ppr_data.columns else 'WEEK'
+    player_ppr_sorted = player_ppr_data.sort_values(week_col)
+    
+    ppr_values = player_ppr_sorted['PPR'].dropna()
     if len(ppr_values) < 2:
-        return np.eye(states)
+        return np.eye(states), np.linspace(0, 30, states + 1)
     
     # Create state bins based on PPR percentiles
     state_bins = np.percentile(ppr_values, [0, 20, 40, 60, 80, 100])
-    player_ppr_data = player_ppr_data.copy()
-    player_ppr_data['state'] = pd.cut(player_ppr_data['PPR'], bins=state_bins, labels=False, include_lowest=True)
-    player_ppr_data['state'] = player_ppr_data['state'].fillna(0).astype(int)
+    player_ppr_sorted_copy = player_ppr_sorted.copy()
+    player_ppr_sorted_copy['state'] = pd.cut(player_ppr_sorted_copy['PPR'], bins=state_bins, labels=False, include_lowest=True)
+    player_ppr_sorted_copy['state'] = player_ppr_sorted_copy['state'].fillna(0).astype(int)
     
     # Build transition matrix
     transition_matrix = np.zeros((states, states))
     state_counts = np.zeros(states)
     
-    for i in range(len(player_ppr_data) - 1):
-        current_state = player_ppr_data.iloc[i]['state']
-        next_state = player_ppr_data.iloc[i + 1]['state']
+    for i in range(len(player_ppr_sorted_copy) - 1):
+        current_state = player_ppr_sorted_copy.iloc[i]['state']
+        next_state = player_ppr_sorted_copy.iloc[i + 1]['state']
         if not pd.isna(current_state) and not pd.isna(next_state):
             transition_matrix[current_state, next_state] += 1
             state_counts[current_state] += 1
@@ -128,7 +152,10 @@ def build_markov_transition_matrix(player_ppr_data, states=5):
 
 def minimax_projection(base_prediction, player_ppr_data, risk_aversion=0.4):
     """Apply minimax theory to find robust projection that minimizes maximum regret"""
-    recent_ppr = player_ppr_data['PPR'].dropna().tail(8)  # Last 8 weeks
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_ppr_data.columns else 'WEEK'
+    player_ppr_sorted = player_ppr_data.sort_values(week_col)
+    recent_ppr = player_ppr_sorted['PPR'].dropna().tail(5)  # Last 5 weeks (matching WR/TE)
     if len(recent_ppr) == 0:
         return base_prediction
     
@@ -171,8 +198,12 @@ def markov_projection(player_ppr_data, transition_matrix, state_bins, steps_ahea
     if len(player_ppr_data) == 0:
         return 0, {}
     
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_ppr_data.columns else 'WEEK'
+    player_ppr_sorted = player_ppr_data.sort_values(week_col)
+    
     # Determine current state from most recent PPR
-    recent_ppr = player_ppr_data['PPR'].dropna().tail(1)
+    recent_ppr = player_ppr_sorted['PPR'].dropna().tail(1)
     if len(recent_ppr) == 0:
         current_state = 2  # Default to middle state
     else:
@@ -197,61 +228,126 @@ def markov_projection(player_ppr_data, transition_matrix, state_bins, steps_ahea
     }
 
 def calculate_performance_penalty(player_ppr_data, base_prediction):
-    """Calculate penalty based on recent performance consistency and trends"""
-    recent_ppr = player_ppr_data['PPR'].dropna().tail(8)
+    """
+    Calculate penalty based on recent performance patterns
+    Now heavily weights last 5 weeks - if recent avg is much different from base, apply strong adjustment
+    """
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_ppr_data.columns else 'WEEK'
+    player_ppr_sorted = player_ppr_data.sort_values(week_col)
+    
+    # Recent performance analysis - get last 5 weeks chronologically
+    recent_ppr = player_ppr_sorted['PPR'].dropna().tail(5)
     if len(recent_ppr) < 3:
         return 0
     
-    # Performance consistency penalty
-    ppr_std = recent_ppr.std()
-    ppr_mean = recent_ppr.mean()
-    consistency_penalty = 0
+    recent_avg = recent_ppr.mean()
     
-    # High variance = inconsistent performance = penalty
-    if ppr_std > ppr_mean * 0.5:  # High coefficient of variation
-        consistency_penalty += 2.0
+    # HEAVY WEIGHT: Apply strong adjustment based on recent avg vs base
+    # Calculate how much recent performance differs from base
+    difference = recent_avg - base_prediction
     
-    # Recent performance trend penalty
-    if len(recent_ppr) >= 4:
-        recent_4 = recent_ppr.tail(4).mean()
-        earlier_4 = recent_ppr.head(4).mean()
-        trend_penalty = max(0, (earlier_4 - recent_4) * 0.3)  # Declining performance
-        consistency_penalty += trend_penalty
+    # Apply strong adjustment: 70% of the difference (heavily weight recent performance)
+    # If recent avg is much lower than base, this will create a large negative adjustment
+    adjustment = 0.70 * difference
+    return np.clip(adjustment, -8.0, 8.0)  # Allow larger adjustments
+
+def calculate_recent_absence_penalty(player_ppr_data, max_week: int = None) -> float:
+    """
+    Calculate penalty for players who haven't been showing up recently
+    Focus on the most recent 2 weeks - if they're missing from those, treat as playing badly
     
-    # Poor performance penalty
-    poor_performance_penalty = 0
-    if ppr_mean < 8:  # Very poor average
-        poor_performance_penalty += 3.0
-    elif ppr_mean < 12:  # Poor average
-        poor_performance_penalty += 1.5
+    Args:
+        player_ppr_data: DataFrame with player's weekly data (should have GLOBAL_WEEK column for chronological ordering)
+        max_week: Maximum week number in the dataset (if None, uses max from player_data)
+    """
+    if len(player_ppr_data) == 0:
+        return -6.0  # No data at all - severe penalty
     
-    # Inconsistent volume penalty (based on rushing appearances)
-    # This would need rushing data, but we can approximate from PPR patterns
-    zero_weeks = (recent_ppr == 0).sum()
-    if zero_weeks > len(recent_ppr) * 0.3:  # More than 30% zero weeks
-        poor_performance_penalty += 2.0
+    # Use GLOBAL_WEEK for chronological ordering if available, otherwise fall back to WEEK
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_ppr_data.columns else 'WEEK'
     
-    total_penalty = consistency_penalty + poor_performance_penalty
-    return total_penalty
+    if max_week is None:
+        max_week = player_ppr_data[week_col].max()
+    
+    player_weeks = set(player_ppr_data[week_col].unique())
+    
+    # Focus on the most recent 2 weeks (most important indicator)
+    most_recent_week = max_week
+    second_most_recent = max_week - 1
+    
+    penalty = 0.0
+    
+    # Check most recent week (most important)
+    if most_recent_week not in player_weeks:
+        penalty -= 5.0  # Missing the most recent week is a strong negative signal
+    else:
+        # Player appeared in most recent week - check their performance
+        recent_data = player_ppr_data[player_ppr_data[week_col] == most_recent_week]
+        if len(recent_data) > 0 and 'PPR' in recent_data.columns:
+            recent_ppr = recent_data['PPR'].dropna()
+            if len(recent_ppr) > 0 and recent_ppr.iloc[0] < 2.0:
+                penalty -= 1.0  # Played but scored very poorly (< 2 PPR)
+    
+    # Check second most recent week
+    if second_most_recent not in player_weeks:
+        penalty -= 3.0  # Missing second most recent week
+    else:
+        # Check their performance in that week
+        recent_data = player_ppr_data[player_ppr_data[week_col] == second_most_recent]
+        if len(recent_data) > 0 and 'PPR' in recent_data.columns:
+            recent_ppr = recent_data['PPR'].dropna()
+            if len(recent_ppr) > 0 and recent_ppr.iloc[0] < 2.0:
+                penalty -= 0.5  # Played but scored poorly
+    
+    # If missing BOTH of the last 2 weeks, apply additional severe penalty
+    if most_recent_week not in player_weeks and second_most_recent not in player_weeks:
+        penalty -= 2.0  # Additional penalty for missing both recent weeks
+    
+    # Check last 4 weeks overall for context (but lighter weight)
+    last_4_weeks = [max_week - i for i in range(4)]
+    appearances_last_4 = sum(1 for week in last_4_weeks if week in player_weeks)
+    
+    # Only apply additional penalty if they appeared in 0 or 1 of the last 4 weeks
+    if appearances_last_4 <= 1:
+        penalty -= 1.0  # Very limited recent activity
+    elif appearances_last_4 == 2:
+        penalty -= 0.5  # Limited recent activity
+    
+    return penalty
 
 def enhanced_prediction(player_name: str, base_prediction: float, artifacts_dir: str):
     """Generate enhanced prediction using minimax theory and Markov chains"""
     
     # Load data
     rush = load_rushing_stats("RushingStats")
-    ppr23 = load_ppr_season("RBPPR2023.csv", 2023)
     ppr24 = load_ppr_season("RBPPR2024.csv", 2024)
+    ppr25 = load_ppr_season("RBPPR2025.csv", 2025)
     
     # Get player PPR data
-    ppr = pd.concat([ppr23, ppr24], ignore_index=True)
+    ppr = pd.concat([ppr24, ppr25], ignore_index=True)
     player_ppr = ppr[ppr["PLAYER"] == player_name].copy()
     
     if len(player_ppr) == 0:
-        print(f"Warning: No PPR data found for {player_name}")
-        return base_prediction, {}
+        # Return base prediction with empty info dict
+        return base_prediction, {
+            'base_prediction': base_prediction,
+            'adjusted_base': base_prediction,
+            'minimax_prediction': base_prediction,
+            'markov_prediction': base_prediction,
+            'performance_penalty': 0.0,
+            'absence_penalty': -6.0,  # Severe penalty for no data
+            'total_adjustment': -6.0,
+            'data_quality': 0.0,
+            'minimax_info': {'max_regret_scenario': 'none', 'adjustment': 0.0},
+            'markov_info': {'current_state': 2, 'state_probs': np.array([0.2, 0.2, 0.2, 0.2, 0.2])}
+        }
     
-    # Sort by week
-    player_ppr = player_ppr.sort_values(["SEASON", "WEEK"])
+    # Sort by GLOBAL_WEEK for chronological ordering (if available), otherwise by SEASON, WEEK
+    if 'GLOBAL_WEEK' in player_ppr.columns:
+        player_ppr = player_ppr.sort_values("GLOBAL_WEEK")
+    else:
+        player_ppr = player_ppr.sort_values(["SEASON", "WEEK"])
     
     # 1. Build Markov transition matrix
     transition_matrix, state_bins = build_markov_transition_matrix(player_ppr)
@@ -262,32 +358,42 @@ def enhanced_prediction(player_name: str, base_prediction: float, artifacts_dir:
     # 3. Apply Markov chain projection
     markov_pred, markov_info = markov_projection(player_ppr, transition_matrix, state_bins)
     
-    # 4. Calculate performance penalty
+    # 4. Calculate performance penalty (now heavily weights last 5 weeks)
     performance_penalty = calculate_performance_penalty(player_ppr, base_prediction)
     
-    # 5. Combine predictions with weights
+    # 5. Calculate absence penalty (for missing recent weeks)
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in ppr.columns else 'WEEK'
+    max_week = ppr[week_col].max() if week_col in ppr.columns else player_ppr['WEEK'].max() if 'WEEK' in player_ppr.columns else None
+    absence_penalty = calculate_recent_absence_penalty(player_ppr, max_week=max_week)
+    
+    # 6. Combine all adjustments
+    total_adjustment = performance_penalty + absence_penalty
+    
+    # 7. Apply adjustments to base prediction first
+    adjusted_base = base_prediction + total_adjustment
+    adjusted_base = np.clip(adjusted_base, 0.0, 40.0)
+    
+    # 8. Combine predictions with weights (using adjusted base)
     # Weight based on data quality and recency
     data_quality = min(1.0, len(player_ppr) / 20)  # More data = higher weight
-    recent_weight = min(1.0, len(player_ppr[player_ppr["SEASON"] == 2024]) / 10)  # 2024 data weight
     
-    # Final prediction: weighted combination
+    # Final prediction: weighted combination using adjusted base
     final_pred = (
-        0.4 * base_prediction +           # Base model
-        0.3 * minimax_pred +              # Minimax robust prediction
-        0.2 * markov_pred +               # Markov chain prediction
-        0.1 * (base_prediction - performance_penalty)  # Penalty-adjusted base
+        0.35 * adjusted_base +           # Adjusted base model (heavily weighted by recent performance)
+        0.30 * minimax_pred +            # Minimax robust prediction
+        0.25 * markov_pred +             # Markov chain prediction
+        0.10 * base_prediction           # Original base (smaller weight)
     )
-    
-    # Apply final penalty
-    final_pred = max(0, final_pred - performance_penalty * 0.5)
     
     return final_pred, {
         'base_prediction': base_prediction,
+        'adjusted_base': adjusted_base,
         'minimax_prediction': minimax_pred,
         'markov_prediction': markov_pred,
         'performance_penalty': performance_penalty,
+        'absence_penalty': absence_penalty,
+        'total_adjustment': total_adjustment,
         'data_quality': data_quality,
-        'recent_weight': recent_weight,
         'minimax_info': minimax_info,
         'markov_info': markov_info
     }
@@ -310,8 +416,8 @@ def main():
     # Get base prediction using existing model
     # Load data for base prediction
     rush = load_rushing_stats("RushingStats")
-    ppr23 = load_ppr_season("RBPPR2023.csv", 2023)
     ppr24 = load_ppr_season("RBPPR2024.csv", 2024)
+    ppr25 = load_ppr_season("RBPPR2025.csv", 2025)
     
     # Get player data for base prediction
     player_rush = rush[rush["PLAYER"] == args.player].copy()

@@ -11,8 +11,8 @@ This system consists of three specialized models, each trained on position-speci
 ## 🏃‍♂️ Running Back (RB) Model
 
 ### **Data Sources**
-- **Weekly Rushing Stats**: `RushingStats/RB01.csv` through `RB35.csv` (2023-2024 seasons)
-- **Weekly PPR Data**: `RBPPR2023.csv` and `RBPPR2024.csv`
+- **Weekly Rushing Stats**: `RushingStats/RB01.csv` through `RB35.csv` (2024-2025 seasons)
+- **Weekly PPR Data**: `RBPPR2024.csv` and `RBPPR2025.csv`
 - **Key Metrics**: Attempts, Yards, Touchdowns, Efficiency, 8+ Defender Box Rate
 
 ### **PPR Scoring System**
@@ -48,7 +48,7 @@ rushing_PPR = 0.1 × YDS + 6.0 × TD
 ### **Model Architecture**
 - **Base Model**: Ridge Regression with comprehensive feature set
 - **Enhancement Layer**: Minimax Theory + Markov Chains post-processing
-- **Training Data**: 34 weeks (2023 weeks 1-18, 2024 weeks 1-16)
+- **Training Data**: 34 weeks (2024 weeks 1-18, 2025 weeks 1-16)
 - **Target Variable**: Weekly PPR points (total rushing + receiving)
 
 ### **Usage**
@@ -116,7 +116,7 @@ python3 enhanced_wr_te_predictor.py --player "Cooper Kupp" --show_details
 
 ### **Data Sources**
 - **Weekly Passing Stats**: `PassingStats/QB01.csv` through `QB35.csv`
-- **Weekly PPR Data**: `QBPPR2023.csv` and `QBPPR2024.csv`
+- **Weekly PPR Data**: `QBPPR2024.csv` and `QBPPR2025.csv`
 - **Key Metrics**: Attempts, Yards, Touchdowns, Interceptions, Passer Rating, Completion %
 
 ### **PPR Scoring System**
@@ -159,7 +159,7 @@ RUSHING_UPSIDE = weekly_PPR - PASSING_PPR
 ### **Usage**
 ```bash
 # Train the QB model
-python3 train_qb_model.py --data_dir ./PassingStats --ppr_2023 QBPPR2023.csv --ppr_2024 QBPPR2024.csv --outfile_dir ./artifacts_qb
+python3 train_qb_model.py --data_dir ./PassingStats --ppr_2024 QBPPR2024.csv --ppr_2025 QBPPR2025.csv --outfile_dir ./artifacts_qb
 
 # Generate enhanced projections
 python3 generate_enhanced_qb_projections.py
@@ -275,10 +275,10 @@ FantasyFootball/
 ├── RushingStats/                      # RB weekly stats (RB01.csv - RB35.csv)
 ├── 
 ├── # PPR Data Files
-├── RBPPR2023.csv                      # RB weekly PPR 2023
 ├── RBPPR2024.csv                      # RB weekly PPR 2024
-├── QBPPR2023.csv                      # QB weekly PPR 2023
+├── RBPPR2025.csv                      # RB weekly PPR 2025
 ├── QBPPR2024.csv                      # QB weekly PPR 2024
+├── QBPPR2025.csv                      # QB weekly PPR 2025
 ├── 
 ├── # Output Directories
 ├── enhanced_projections/              # RB projections and visualizations
@@ -297,7 +297,7 @@ FantasyFootball/
 python3 train_model_fixed.py --data_dir ./RecievingStats --outfile_dir ./artifacts_fixed --min_games 3 --test_weeks 4
 
 # Train QB model  
-python3 train_qb_model.py --data_dir ./PassingStats --ppr_2023 QBPPR2023.csv --ppr_2024 QBPPR2024.csv --outfile_dir ./artifacts_qb --min_games 3 --test_weeks 4
+python3 train_qb_model.py --data_dir ./PassingStats --ppr_2024 QBPPR2024.csv --ppr_2025 QBPPR2025.csv --outfile_dir ./artifacts_qb --min_games 3 --test_weeks 4
 
 # RB model uses pre-trained artifacts (artifacts_rb2/)
 ```

@@ -2,7 +2,7 @@
 """
 QB Model Training Script
 Trains a comprehensive QB prediction model using passing stats and PPR data
-Usage: python3 train_qb_model.py --data_dir ./PassingStats --ppr_2023 QBPPR2023.csv --ppr_2024 QBPPR2024.csv --outfile_dir ./artifacts_qb --min_games 3 --test_weeks 4
+Usage: python3 train_qb_model.py --data_dir ./PassingStats --ppr_2024 QBPPR2024.csv --ppr_2025 QBPPR2025.csv --outfile_dir ./artifacts_qb --min_games 3 --test_weeks 4
 """
 
 import argparse
@@ -37,13 +37,18 @@ def to_num(x):
         return np.nan
 
 def load_all_weeks(data_dir: str) -> pd.DataFrame:
-    """Load all weekly passing stats files"""
+    """Load all weekly passing stats files
+    Automatically maps first 18 weeks to 2024 season, remaining weeks to 2025 season
+    """
     files = sorted(glob.glob(os.path.join(data_dir, "QB*.csv")))
     if not files:
         raise FileNotFoundError(f"No QB CSVs found in {data_dir}")
     
+    total_files = len(files)
+    first_season_weeks = 18  # First 18 weeks belong to earliest season (2024)
+    
     frames = []
-    for week_idx, f in enumerate(files, start=1):
+    for global_week_idx, f in enumerate(files, start=1):
         df = pd.read_csv(f)
         # Normalize column names - handle the quotes that pandas adds
         df.columns = [c.strip().strip("'\"").upper() for c in df.columns]
@@ -56,12 +61,22 @@ def load_all_weeks(data_dir: str) -> pd.DataFrame:
         
         # Standardize player name column
         df = df.rename(columns={"PLAYER NAME": "PLAYER"})
-        df["WEEK"] = week_idx
-        df["GLOBAL_WEEK"] = week_idx  # Add global week for merging
+        
+        # Map to season and week based on position in file sequence
+        if global_week_idx <= first_season_weeks:
+            # First 18 weeks → 2024 season
+            df["SEASON"] = 2024
+            df["WEEK"] = global_week_idx  # Week 1-18 of 2024 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 1-18
+        else:
+            # Remaining weeks → 2025 season
+            df["SEASON"] = 2025
+            df["WEEK"] = global_week_idx - first_season_weeks  # Week 1-N of 2025 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 19+
         
         # Update wanted list to use "PLAYER" instead of "PLAYER NAME"
         wanted_renamed = ["PLAYER","TEAM","TT","CAY","IAY","AYD","AGG%","LCAD","AYTS","ATT","YDS","TD","INT","RATE","COMP%","XCOMP%","+/-"]
-        frames.append(df[wanted_renamed + ["WEEK", "GLOBAL_WEEK"]])
+        frames.append(df[wanted_renamed + ["WEEK", "GLOBAL_WEEK", "SEASON"]])
     
     data = pd.concat(frames, ignore_index=True)
     
@@ -75,37 +90,51 @@ def load_all_weeks(data_dir: str) -> pd.DataFrame:
     
     return data
 
-def load_ppr_data(ppr_2023: str, ppr_2024: str) -> pd.DataFrame:
-    """Load and combine QB PPR data from 2023 and 2024"""
-    ppr_2023_df = pd.read_csv(ppr_2023)
+def load_ppr_data(ppr_2024: str, ppr_2025: str, second_season_weeks: int = None) -> pd.DataFrame:
+    """Load and combine QB PPR data from 2024 and 2025
+    Args:
+        ppr_2024: Path to 2024 PPR CSV file
+        ppr_2025: Path to 2025 PPR CSV file  
+        second_season_weeks: Number of weeks in second season (2025). If None, uses all available weeks.
+    """
+    first_season_weeks = 18  # First 18 weeks always belong to 2024
+    
     ppr_2024_df = pd.read_csv(ppr_2024)
+    ppr_2025_df = pd.read_csv(ppr_2025)
     
-    # Process 2023 data (weeks 1-18)
-    ppr_2023_long = pd.melt(ppr_2023_df, 
-                           id_vars=['#', 'Player', 'Pos', 'Team'],
-                           value_vars=[str(i) for i in range(1, 19)],
-                           var_name='WEEK',
-                           value_name='PPR')
-    
-    ppr_2023_long = ppr_2023_long.rename(columns={'Player': 'PLAYER', 'Team': 'TEAM'})
-    ppr_2023_long['WEEK'] = ppr_2023_long['WEEK'].astype(int)
-    ppr_2023_long['SEASON'] = 2023
-    ppr_2023_long['GLOBAL_WEEK'] = ppr_2023_long['WEEK']
-    
-    # Process 2024 data (weeks 19-35)
+    # Process 2024 data (weeks 1-18)
     ppr_2024_long = pd.melt(ppr_2024_df,
                            id_vars=['#', 'Player', 'Pos', 'Team'],
-                           value_vars=[str(i) for i in range(1, 19)],
+                           value_vars=[str(i) for i in range(1, first_season_weeks + 1)],
                            var_name='WEEK',
                            value_name='PPR')
     
     ppr_2024_long = ppr_2024_long.rename(columns={'Player': 'PLAYER', 'Team': 'TEAM'})
     ppr_2024_long['WEEK'] = ppr_2024_long['WEEK'].astype(int)
     ppr_2024_long['SEASON'] = 2024
-    ppr_2024_long['GLOBAL_WEEK'] = ppr_2024_long['WEEK'] + 18  # Offset for 2024
+    ppr_2024_long['GLOBAL_WEEK'] = ppr_2024_long['WEEK']
+    
+    # Process 2025 data - use only the weeks that exist in stats files
+    # If second_season_weeks is provided, use that many weeks; otherwise use all available
+    if second_season_weeks is None:
+        # Determine max weeks from available columns in the PPR file
+        week_cols = [c for c in ppr_2025_df.columns if c.isdigit() and c != '#']
+        max_week = max([int(c) for c in week_cols]) if week_cols else 18
+        second_season_weeks = max_week
+    
+    ppr_2025_long = pd.melt(ppr_2025_df,
+                           id_vars=['#', 'Player', 'Pos', 'Team'],
+                           value_vars=[str(i) for i in range(1, second_season_weeks + 1)],
+                           var_name='WEEK',
+                           value_name='PPR')
+    
+    ppr_2025_long = ppr_2025_long.rename(columns={'Player': 'PLAYER', 'Team': 'TEAM'})
+    ppr_2025_long['WEEK'] = ppr_2025_long['WEEK'].astype(int)
+    ppr_2025_long['SEASON'] = 2025
+    ppr_2025_long['GLOBAL_WEEK'] = ppr_2025_long['WEEK'] + first_season_weeks  # Offset by first season weeks
     
     # Combine data
-    combined_ppr = pd.concat([ppr_2023_long, ppr_2024_long], ignore_index=True)
+    combined_ppr = pd.concat([ppr_2024_long, ppr_2025_long], ignore_index=True)
     
     # Clean PPR data
     combined_ppr['PPR'] = combined_ppr['PPR'].apply(to_num)
@@ -187,7 +216,7 @@ def build_training_table(passing_data: pd.DataFrame, ppr_data: pd.DataFrame, min
         merged[f"{c}_momentum_short"] = merged[f"{c}_roll3"] - merged[f"{c}_roll5"]
         merged[f"{c}_momentum_medium"] = merged[f"{c}_roll5"] - merged[f"{c}_roll8"]
     
-    # Recent season performance (last 17 weeks = 2024 season)
+    # Recent season performance (last 17 weeks = 2025 season)
     for c in ["ATT", "YDS", "TD", "INT", "RATE", "COMP%"]:
         recent_season = group[c].shift(1).rolling(17, min_periods=8).mean()
         merged[f"{c}_recent_season"] = recent_season
@@ -198,7 +227,7 @@ def build_training_table(passing_data: pd.DataFrame, ppr_data: pd.DataFrame, min
     
     # Week number features with recent emphasis
     merged["week_number"] = merged["GLOBAL_WEEK"]
-    merged["is_recent_season"] = (merged["GLOBAL_WEEK"] >= 19).astype(int)  # Last 17 weeks (2024)
+    merged["is_recent_season"] = (merged["GLOBAL_WEEK"] >= 19).astype(int)  # Last 17 weeks (2025)
     merged["very_recent"] = (merged["GLOBAL_WEEK"] >= 31).astype(int)  # Last 5 weeks
     
     # High-volume indicators
@@ -287,8 +316,14 @@ def main(args):
     passing_data = load_all_weeks(args.data_dir)
     print(f"Loaded {len(passing_data)} passing records")
     
+    # Determine number of weeks in second season from stats files
+    total_weeks = passing_data['GLOBAL_WEEK'].max()
+    first_season_weeks = 18
+    second_season_weeks = total_weeks - first_season_weeks
+    print(f"Detected {first_season_weeks} weeks in 2024 season, {second_season_weeks} weeks in 2025 season")
+    
     print("Loading PPR data...")
-    ppr_data = load_ppr_data(args.ppr_2023, args.ppr_2024)
+    ppr_data = load_ppr_data(args.ppr_2024, args.ppr_2025, second_season_weeks=second_season_weeks)
     print(f"Loaded {len(ppr_data)} PPR records")
     
     print("Building training table...")
@@ -429,8 +464,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="./PassingStats", help="Directory with weekly passing CSVs")
-    parser.add_argument("--ppr_2023", default="QBPPR2023.csv", help="2023 QB PPR CSV file")
     parser.add_argument("--ppr_2024", default="QBPPR2024.csv", help="2024 QB PPR CSV file")
+    parser.add_argument("--ppr_2025", default="QBPPR2025.csv", help="2025 QB PPR CSV file")
     parser.add_argument("--outfile_dir", default="./artifacts_qb", help="Where to save model & metadata")
     parser.add_argument("--min_games", type=int, default=3, help="Min prior games for rolling features")
     parser.add_argument("--test_weeks", type=int, default=4, help="Use last N weeks as test set")

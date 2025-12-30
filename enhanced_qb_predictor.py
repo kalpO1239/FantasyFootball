@@ -107,8 +107,12 @@ def markov_chain_prediction(player_data: pd.DataFrame) -> float:
     if len(player_data) < 5:
         return 0.0
     
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_data.columns else 'WEEK'
+    player_data_sorted = player_data.sort_values(week_col)
+    
     # Get historical PPR data
-    historical_ppr = player_data['TARGET_PPR'].dropna().values
+    historical_ppr = player_data_sorted['TARGET_PPR'].dropna().values
     if len(historical_ppr) < 5:
         return 0.0
     
@@ -191,51 +195,54 @@ def markov_chain_prediction(player_data: pd.DataFrame) -> float:
     raw_adjustment = recent_avg - overall_avg
     return raw_adjustment * 0.25  # Reduce impact to 25% of original for QBs
 
-def calculate_performance_penalty(player_data: pd.DataFrame) -> float:
+def calculate_performance_penalty(player_data: pd.DataFrame, base_prediction: float = None) -> float:
     """
     Calculate penalties based on recent performance patterns
+    Use last 5 games actually played (skip NaN weeks, go back until we have 5 real entries)
     """
-    if len(player_data) < 3:
+    # Determine which PPR column to use
+    ppr_col = None
+    if 'PPR' in player_data.columns:
+        ppr_col = 'PPR'
+    elif 'TARGET_PPR' in player_data.columns:
+        ppr_col = 'TARGET_PPR'
+    else:
         return 0.0
     
-    # Recent performance analysis
-    recent_ppr = player_data['TARGET_PPR'].dropna().tail(5)
-    if len(recent_ppr) < 3:
+    # Determine sorting column - sort by most recent first
+    if 'SEASON' in player_data.columns and 'WEEK' in player_data.columns:
+        # Use SEASON and WEEK for sorting (prioritize most recent season, then most recent week)
+        player_data_sorted = player_data.sort_values(['SEASON', 'WEEK'], ascending=[False, False])
+    elif 'GLOBAL_WEEK' in player_data.columns:
+        # Use GLOBAL_WEEK for chronological ordering (most recent first)
+        player_data_sorted = player_data.sort_values('GLOBAL_WEEK', ascending=False)
+    elif 'WEEK' in player_data.columns:
+        player_data_sorted = player_data.sort_values('WEEK', ascending=False)
+    else:
         return 0.0
     
-    penalty = 0.0
+    # Get last 5 games where PPR is not NaN (actual games played)
+    # Go back through sorted data until we have 5 games
+    recent_games = player_data_sorted[player_data_sorted[ppr_col].notna()].head(5)
     
-    # Penalty for consistently poor performance (reduced impact)
-    poor_performance_threshold = 15.0  # QBs typically score higher
-    poor_performance_rate = (recent_ppr < poor_performance_threshold).mean()
-    if poor_performance_rate > 0.6:  # More than 60% of recent games under 15 PPR
-        penalty -= 0.5 * poor_performance_rate  # Reduced from 2.0 to 0.5
+    if len(recent_games) < 3:
+        # Not enough games played - return 0 (let absence penalty handle it if needed)
+        return 0.0
     
-    # Penalty for high variance (inconsistency) - reduced
-    if len(recent_ppr) >= 4:
-        ppr_std = recent_ppr.std()
-        if ppr_std > 10.0:  # High variance for QBs
-            penalty -= 0.2  # Reduced from 0.8 to 0.2
+    # Calculate average from last 5 actual games
+    recent_ppr = recent_games[ppr_col]
+    recent_avg = recent_ppr.mean()
     
-    # Penalty for declining trend - reduced
-    if len(recent_ppr) >= 4:
-        recent_trend = recent_ppr.tail(3).mean() - recent_ppr.head(2).mean()
-        if recent_trend < -3.0:  # Declining by more than 3 PPR
-            penalty -= 0.4  # Reduced from 1.5 to 0.4
+    # If base_prediction is provided, adjust based on recent avg vs base
+    if base_prediction is not None and base_prediction > 0:
+        # Calculate how much recent performance differs from base
+        difference = recent_avg - base_prediction
+        
+        # Apply adjustment: 70% of the difference (heavily weight recent performance)
+        adjustment = 0.70 * difference
+        return np.clip(adjustment, -10.0, 10.0)  # Allow larger adjustments for QBs (they score higher)
     
-    # Reward for consistently good performance - reduced
-    excellent_performance_threshold = 25.0  # QBs typically score higher
-    excellent_performance_rate = (recent_ppr > excellent_performance_threshold).mean()
-    if excellent_performance_rate > 0.6:  # More than 60% of recent games above 25 PPR
-        penalty += 0.4 * excellent_performance_rate  # Reduced from 1.5 to 0.4
-    
-    # Reward for improving trend - reduced
-    if len(recent_ppr) >= 4:
-        recent_trend = recent_ppr.tail(3).mean() - recent_ppr.head(2).mean()
-        if recent_trend > 3.0:  # Improving by more than 3 PPR
-            penalty += 0.4  # Reduced from 1.5 to 0.4
-    
-    return np.clip(penalty, -1.5, 1.5)  # Reduced bounds from 4.0 to 1.5
+    return 0.0
 
 def calculate_passing_consistency_factor(player_data: pd.DataFrame) -> float:
     """
@@ -269,8 +276,12 @@ def calculate_rushing_upside_factor(player_data: pd.DataFrame) -> float:
     if len(player_data) < 3:
         return 0.0
     
+    # Use GLOBAL_WEEK for chronological ordering if available
+    week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_data.columns else 'WEEK'
+    player_data_sorted = player_data.sort_values(week_col)
+    
     # Look at recent rushing upside
-    recent_rushing = player_data['RUSHING_UPSIDE'].dropna().tail(5)
+    recent_rushing = player_data_sorted['RUSHING_UPSIDE'].dropna().tail(5)
     if len(recent_rushing) < 3:
         return 0.0
     
@@ -281,14 +292,104 @@ def calculate_rushing_upside_factor(player_data: pd.DataFrame) -> float:
     # Simply return the average rushing upside - this is what should be added to passing PPR
     return avg_rushing
 
+def calculate_recent_absence_penalty(player_data: pd.DataFrame, max_week: int = None) -> float:
+    """
+    Calculate penalty for players who haven't been showing up recently
+    Focus on the most recent 2 weeks - if they're missing from those, treat as playing badly
+    
+    Args:
+        player_data: DataFrame with player's weekly data (can be from PPR files with SEASON/WEEK or training table with GLOBAL_WEEK)
+        max_week: Maximum week number in the dataset (if None, uses max from player_data)
+    """
+    if len(player_data) == 0:
+        return -6.0  # No data at all - severe penalty
+    
+    # If we have SEASON column, use WEEK from 2025 season; otherwise use GLOBAL_WEEK
+    if 'SEASON' in player_data.columns:
+        # PPR data from files - use 2025 season WEEK
+        player_2025 = player_data[player_data['SEASON'] == 2025].copy()
+        if len(player_2025) == 0:
+            return -6.0
+        week_col = 'WEEK'
+        player_data_to_use = player_2025
+        max_week = min(player_data_to_use[week_col].max(), 16)  # Cap at week 16
+    else:
+        # Training table data - use GLOBAL_WEEK
+        week_col = 'GLOBAL_WEEK' if 'GLOBAL_WEEK' in player_data.columns else 'WEEK'
+        player_data_to_use = player_data
+        if max_week is None:
+            max_week = player_data_to_use[week_col].max()
+    
+    # Get weeks where player actually played (has non-NaN PPR)
+    ppr_col = 'PPR' if 'PPR' in player_data_to_use.columns else 'TARGET_PPR'
+    if ppr_col in player_data_to_use.columns:
+        # Only count weeks where they actually played (PPR is not NaN)
+        played_weeks = set(player_data_to_use[player_data_to_use[ppr_col].notna()][week_col].unique())
+    else:
+        # Fallback: use all weeks
+        played_weeks = set(player_data_to_use[week_col].unique())
+    
+    # Focus on the most recent 2 weeks (most important indicator)
+    most_recent_week = max_week
+    second_most_recent = max_week - 1
+    
+    penalty = 0.0
+    
+    # Check most recent week (most important)
+    if most_recent_week not in played_weeks:
+        penalty -= 5.0  # Missing the most recent week is a strong negative signal
+    else:
+        # Player appeared in most recent week - check their performance
+        recent_data = player_data_to_use[player_data_to_use[week_col] == most_recent_week]
+        if len(recent_data) > 0 and ppr_col in recent_data.columns:
+            recent_ppr = recent_data[ppr_col].dropna()
+            if len(recent_ppr) > 0 and recent_ppr.iloc[0] < 5.0:  # Very low for QB (< 5 PPR)
+                penalty -= 2.0  # Played but scored very poorly
+    
+    # Check second most recent week
+    if second_most_recent not in played_weeks:
+        penalty -= 3.0  # Missing second most recent week
+    else:
+        # Check their performance in that week
+        recent_data = player_data_to_use[player_data_to_use[week_col] == second_most_recent]
+        if len(recent_data) > 0 and ppr_col in recent_data.columns:
+            recent_ppr = recent_data[ppr_col].dropna()
+            if len(recent_ppr) > 0 and recent_ppr.iloc[0] < 5.0:
+                penalty -= 1.0  # Played but scored poorly
+    
+    # If missing BOTH of the last 2 weeks, apply additional severe penalty
+    if most_recent_week not in played_weeks and second_most_recent not in played_weeks:
+        penalty -= 2.0  # Additional penalty for missing both recent weeks
+    
+    # Check last 4 weeks overall for context (but lighter weight)
+    last_4_weeks = [max_week - i for i in range(4)]
+    appearances_last_4 = sum(1 for week in last_4_weeks if week in played_weeks)
+    
+    # Only apply additional penalty if they appeared in 0 or 1 of the last 4 weeks
+    if appearances_last_4 <= 1:
+        penalty -= 1.0  # Very limited recent activity
+    elif appearances_last_4 == 2:
+        penalty -= 0.5  # Limited recent activity
+    
+    return penalty
+
 def enhanced_prediction(player_name: str, base_prediction: float, artifacts_dir: Path) -> Dict:
     """
     Generate enhanced prediction using minimax theory and Markov chains
     """
     try:
-        # Load player data
+        # Load player data from training table
         table = load_qb_data(artifacts_dir)
         player_data = table[table["PLAYER"].str.lower() == player_name.lower()].sort_values("GLOBAL_WEEK")
+        
+        # Also load PPR data directly from files for accurate recent performance calculation
+        try:
+            from train_qb_model import load_ppr_data
+            ppr_data = load_ppr_data("QBPPR2024.csv", "QBPPR2025.csv", second_season_weeks=16)
+            player_ppr_data = ppr_data[ppr_data["PLAYER"].str.lower() == player_name.lower()]
+        except Exception as e:
+            # Fallback to using training table if PPR loading fails
+            player_ppr_data = None
         
         if player_data.empty:
             return {
@@ -305,28 +406,37 @@ def enhanced_prediction(player_name: str, base_prediction: float, artifacts_dir:
                 "error": "Player not found in training data"
             }
         
+        # Get max week for absence penalty calculation
+        # If we have PPR data, use week 16 (max in QBPPR2025), otherwise use GLOBAL_WEEK
+        if player_ppr_data is not None and len(player_ppr_data) > 0:
+            max_week = 16  # QBPPR2025 has weeks 1-16
+        elif 'GLOBAL_WEEK' in table.columns:
+            max_week = table['GLOBAL_WEEK'].max()
+        elif 'WEEK' in table.columns:
+            max_week = table['WEEK'].max()
+        else:
+            max_week = player_data['WEEK'].max() if 'WEEK' in player_data.columns else None
+        
         # Calculate adjustments
         minimax_adj = calculate_minimax_adjustment(player_data, base_prediction)
         markov_adj = markov_chain_prediction(player_data)
-        performance_penalty = calculate_performance_penalty(player_data)
+        # Use PPR data directly if available, otherwise fall back to training table
+        performance_penalty = calculate_performance_penalty(
+            player_ppr_data if player_ppr_data is not None and len(player_ppr_data) > 0 else player_data, 
+            base_prediction=base_prediction
+        )
         passing_factor = calculate_passing_consistency_factor(player_data)
-        # Note: Rushing factor removed - base model already includes total PPR (passing + rushing)
+        # No absence penalty for QBs - removed per user request
         
-        # Combine adjustments (no rushing factor since base model already includes it)
+        # Combine all adjustments (no absence penalty for QBs)
         total_adjustment = minimax_adj + markov_adj + performance_penalty + passing_factor
         
-        # Apply adjustment to base prediction
-        enhanced_pred = base_prediction + total_adjustment
+        # Apply adjustments to base prediction first
+        adjusted_base = base_prediction + total_adjustment
+        adjusted_base = np.clip(adjusted_base, 0.0, 50.0)
         
-        # Apply mobile QB correction factor for severely underpredicted players
-        # Based on actual vs predicted performance analysis
-        recent_ppr = player_data['PPR'].tail(5).mean() if len(player_data) >= 5 else player_data['PPR'].mean()
-        
-        # If actual performance is significantly higher than base prediction, apply correction
-        if recent_ppr > base_prediction * 1.5:  # Actual is 50%+ higher than predicted
-            correction_factor = min(1.8, recent_ppr / base_prediction)  # Cap at 1.8x
-            enhanced_pred = enhanced_pred * correction_factor
-            print(f"  Applied mobile QB correction: {correction_factor:.2f}x")
+        # Use adjusted base for enhanced prediction (heavily weighted by recent performance)
+        enhanced_pred = adjusted_base
         
         # Ensure reasonable bounds for QBs
         enhanced_pred = np.clip(enhanced_pred, 0.0, 50.0)
@@ -334,12 +444,14 @@ def enhanced_prediction(player_name: str, base_prediction: float, artifacts_dir:
         return {
             "player": player_name,
             "base_prediction": base_prediction,
+            "adjusted_base": adjusted_base,
             "enhanced_prediction": enhanced_pred,
             "adjustments": {
                 "minimax": minimax_adj,
                 "markov": markov_adj,
                 "performance_penalty": performance_penalty,
-                "passing_consistency": passing_factor
+                "passing_consistency": passing_factor,
+                "absence_penalty": 0.0  # Not used for QBs
             },
             "total_adjustment": total_adjustment,
             "latest_week": player_data['GLOBAL_WEEK'].iloc[-1] if len(player_data) > 0 else None

@@ -38,11 +38,26 @@ def to_num(x):
         return np.nan
 
 def load_all_weeks(data_dir: str) -> pd.DataFrame:
-    files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
-    if not files:
+    """Load all weekly receiving stats files
+    Automatically maps first 18 weeks to 2024 season, remaining weeks to 2025 season
+    Files are sorted by numeric order (Re19 = week 1 of 2024, Re20 = week 2, etc.)
+    """
+    import re
+    all_files = glob.glob(os.path.join(data_dir, "*.csv"))
+    if not all_files:
         raise FileNotFoundError(f"No CSVs found in {data_dir}")
+    
+    # Sort files numerically by extracting the number from filename (e.g., Re19 -> 19)
+    def get_file_number(f):
+        match = re.search(r'Re(\d+)', os.path.basename(f))
+        return int(match.group(1)) if match else 0
+    
+    files = sorted(all_files, key=get_file_number)
+    
+    first_season_weeks = 18  # First 18 weeks belong to earliest season (2024)
+    
     frames = []
-    for week_idx, f in enumerate(files, start=1):
+    for global_week_idx, f in enumerate(files, start=1):
         df = pd.read_csv(f)
         # Normalize column names
         df.columns = [c.strip().upper() for c in df.columns]
@@ -53,8 +68,20 @@ def load_all_weeks(data_dir: str) -> pd.DataFrame:
                 raise ValueError(f"Missing column '{w}' in file {f}")
         # Filter positions
         df = df[df["POS"].isin(KEEP_POS)].copy()
-        df["WEEK"] = week_idx
-        frames.append(df[wanted + ["WEEK"]])
+        
+        # Map to season and week based on position in file sequence
+        if global_week_idx <= first_season_weeks:
+            # First 18 weeks → 2024 season
+            df["SEASON"] = 2024
+            df["WEEK"] = global_week_idx  # Week 1-18 of 2024 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 1-18
+        else:
+            # Remaining weeks → 2025 season
+            df["SEASON"] = 2025
+            df["WEEK"] = global_week_idx - first_season_weeks  # Week 1-N of 2025 season
+            df["GLOBAL_WEEK"] = global_week_idx  # Global week 19+
+        
+        frames.append(df[wanted + ["WEEK", "GLOBAL_WEEK", "SEASON"]])
     data = pd.concat(frames, ignore_index=True)
 
     # Convert numerics
@@ -131,8 +158,8 @@ def add_fixed_features(df: pd.DataFrame, min_games: int = 3) -> pd.DataFrame:
 
     # ENHANCED: Week number features with recent emphasis
     df["week_number"] = df["WEEK"]
-    df["is_recent_season"] = (df["WEEK"] >= 18).astype(int)  # Last 17 weeks (2024)
-    df["very_recent"] = (df["WEEK"] >= 30).astype(int)  # Last 5 weeks
+    df["is_recent_season"] = (df["GLOBAL_WEEK"] >= 19).astype(int)  # Last N weeks (2025 season)
+    df["very_recent"] = (df["GLOBAL_WEEK"] >= (df["GLOBAL_WEEK"].max() - 4)).astype(int)  # Last 5 weeks
 
     # FIXED: Recent high-volume indicators (based on recent performance)
     df["high_volume_tar_recent"] = (df["TAR_roll3"] >= 8).astype(int)  # 8+ targets recent avg

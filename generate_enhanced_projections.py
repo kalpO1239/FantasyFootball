@@ -35,8 +35,8 @@ def generate_all_projections(artifacts_dir="./artifacts_rb2", max_players=None):
     
     print("Loading data...")
     rush = load_rushing_stats("RushingStats")
-    ppr23 = load_ppr_season("RBPPR2023.csv", 2023)
     ppr24 = load_ppr_season("RBPPR2024.csv", 2024)
+    ppr25 = load_ppr_season("RBPPR2025.csv", 2025)
     
     # Get all players
     all_players = get_all_players()
@@ -67,17 +67,20 @@ def generate_all_projections(artifacts_dir="./artifacts_rb2", max_players=None):
             enhanced_pred, info = enhanced_prediction(player, base_pred, artifacts_dir)
             
             # Get player stats for context
-            ppr = pd.concat([ppr23, ppr24], ignore_index=True)
+            ppr = pd.concat([ppr24, ppr25], ignore_index=True)
             player_ppr = ppr[ppr["PLAYER"] == player]
             recent_ppr = player_ppr["PPR"].dropna().tail(8)
             
             results.append({
                 'PLAYER': player,
                 'BASE_PREDICTION': base_pred,
+                'ADJUSTED_BASE': info.get('adjusted_base', base_pred),
                 'ENHANCED_PREDICTION': enhanced_pred,
                 'MINIMAX_PREDICTION': info['minimax_prediction'],
                 'MARKOV_PREDICTION': info['markov_prediction'],
                 'PERFORMANCE_PENALTY': info['performance_penalty'],
+                'ABSENCE_PENALTY': info.get('absence_penalty', 0.0),
+                'TOTAL_ADJUSTMENT': info.get('total_adjustment', 0.0),
                 'RECENT_PPR_AVG': recent_ppr.mean() if len(recent_ppr) > 0 else 0,
                 'RECENT_PPR_STD': recent_ppr.std() if len(recent_ppr) > 0 else 0,
                 'DATA_QUALITY': info['data_quality'],

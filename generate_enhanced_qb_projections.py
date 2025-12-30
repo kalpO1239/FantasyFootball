@@ -54,11 +54,13 @@ def generate_all_projections(artifacts_dir: Path = Path("./artifacts_qb")) -> pd
             results.append({
                 'player': result['player'],
                 'base_prediction': result['base_prediction'],
+                'adjusted_base': result.get('adjusted_base', result['base_prediction']),
                 'enhanced_prediction': result['enhanced_prediction'],
                 'minimax_adjustment': result['adjustments']['minimax'],
                 'markov_adjustment': result['adjustments']['markov'],
                 'performance_penalty': result['adjustments']['performance_penalty'],
                 'passing_consistency': result['adjustments']['passing_consistency'],
+                'absence_penalty': result['adjustments'].get('absence_penalty', 0.0),
                 'total_adjustment': result['total_adjustment'],
                 'latest_week': result.get('latest_week', None)
             })

@@ -45,21 +45,54 @@ def generate_all_projections(artifacts_dir: Path = Path("./artifacts_fixed")) ->
                 continue
             
             # Get enhanced prediction
-            result = enhanced_prediction(player, base_pred, artifacts_dir)
+            residual_std = base_info.get('residual_std', 5.0)
+            result = enhanced_prediction(player, base_pred, artifacts_dir, residual_std=residual_std)
             
             if 'error' in result:
                 print(f"  Warning for {player}: {result['error']}")
+            
+            # Extract probability information
+            mc = result.get('monte_carlo', {})
+            probs = mc.get('probabilities', {})
+            threshold_probs = mc.get('threshold_probs', {})
+            percentiles = mc.get('percentiles', {})
             
             # Add to results
             results.append({
                 'player': result['player'],
                 'base_prediction': result['base_prediction'],
+                'adjusted_base': result.get('adjusted_base', result['base_prediction']),
                 'enhanced_prediction': result['enhanced_prediction'],
                 'minimax_adjustment': result['adjustments']['minimax'],
-                'markov_adjustment': result['adjustments']['markov'],
                 'performance_penalty': result['adjustments']['performance_penalty'],
                 'volume_consistency': result['adjustments']['volume_consistency'],
+                'absence_penalty': result['adjustments'].get('absence_penalty', 0.0),
                 'total_adjustment': result['total_adjustment'],
+                # Monte Carlo probabilities
+                'prob_lt5': probs.get('<5', 0),
+                'prob_5_10': probs.get('5-10', 0),
+                'prob_10_15': probs.get('10-15', 0),
+                'prob_15_20': probs.get('15-20', 0),
+                'prob_20_25': probs.get('20-25', 0),
+                'prob_25_30': probs.get('25-30', 0),
+                'prob_30plus': probs.get('30+', 0),
+                # Threshold probabilities
+                'prob_ge8': threshold_probs.get('≥8', 0),
+                'prob_ge10': threshold_probs.get('≥10', 0),
+                'prob_ge12': threshold_probs.get('≥12', 0),
+                'prob_ge15': threshold_probs.get('≥15', 0),
+                'prob_ge18': threshold_probs.get('≥18', 0),
+                'prob_ge20': threshold_probs.get('≥20', 0),
+                'prob_ge25': threshold_probs.get('≥25', 0),
+                'prob_ge30': threshold_probs.get('≥30', 0),
+                # Percentiles
+                'p10': percentiles.get('p10', 0),
+                'p25': percentiles.get('p25', 0),
+                'p50': percentiles.get('p50', 0),
+                'p75': percentiles.get('p75', 0),
+                'p90': percentiles.get('p90', 0),
+                'mean': percentiles.get('mean', 0),
+                'std': percentiles.get('std', 0),
                 'latest_week': result.get('latest_week', None)
             })
             
@@ -146,8 +179,8 @@ def create_visualizations(df: pd.DataFrame, output_dir: Path = Path("./enhanced_
     ax1.axhline(y=0, color='black', linestyle='-', alpha=0.3)
     
     # Component breakdown
-    components = ['minimax_adjustment', 'markov_adjustment', 'performance_penalty', 'volume_consistency']
-    component_labels = ['Minimax', 'Markov', 'Performance', 'Volume']
+    components = ['minimax_adjustment', 'performance_penalty', 'volume_consistency', 'absence_penalty']
+    component_labels = ['Minimax', 'Performance', 'Volume', 'Absence']
     
     x = np.arange(len(top_30_adj))
     width = 0.2
